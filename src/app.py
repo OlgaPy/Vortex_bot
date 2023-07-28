@@ -27,9 +27,12 @@ def make_keyboard(rating: int = 0) -> InlineKeyboardMarkup:
     return keyboad
 
 
-async def vote_handler(update: Update, context: CallbackContext):
+async def vote_handler(update: Update, _):
     query = update.callback_query
     updated = False
+
+    if not query.data:
+        return
 
     match query.data:
         case ButtonValues.POSITIVE_VOTE:
@@ -38,7 +41,7 @@ async def vote_handler(update: Update, context: CallbackContext):
             updated = await db.set_user_vote(query.message.message_id, query.from_user.id, ButtonValues.NEGATIVE_VOTE)
         case ButtonValues.RATING:
             rating = await db.get_rating(query.message.message_id)
-            await query.answer(f"+{rating[0]} -{rating[1]}")
+            await query.answer(f"Плюсы: +{rating[0]}\nМинусы: -{rating[1]}")
             return
 
     await query.answer()
@@ -46,6 +49,16 @@ async def vote_handler(update: Update, context: CallbackContext):
         rating = await db.get_rating(query.message.message_id)
         keyboard = make_keyboard(rating[0] - rating[1])
         await query.edit_message_reply_markup(keyboard)
+
+        if is_popular(rating):
+            await query.message.forward(CHAT_ID)
+
+
+async def is_popular(rating: tuple[int, int]) -> bool:
+    """Checks if message is situatable for popular"""
+
+    # positive votes more than 80% and this is at least 5 positive votes
+    return rating[0] - rating[1] / rating[0] + rating[1] > 0.8 and rating[0] >= 5
 
 
 async def message_handler(update: Update, context: CallbackContext):
