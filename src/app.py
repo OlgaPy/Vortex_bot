@@ -54,11 +54,14 @@ async def vote_handler(update: Update, _):
             await query.message.forward(CHAT_ID)
 
 
-async def is_popular(rating: tuple[int, int]) -> bool:
+def is_popular(rating: tuple[int, int]) -> bool:
     """Checks if message is situatable for popular"""
 
+    if rating[0] + rating[1] == 0:
+        return False
+
     # positive votes more than 80% and this is at least 5 positive votes
-    return rating[0] - rating[1] / rating[0] + rating[1] > 0.8 and rating[0] >= 5
+    return (rating[0] - rating[1]) / (rating[0] + rating[1]) > 0.8 and rating[0] >= 5
 
 
 async def message_handler(update: Update, context: CallbackContext):
