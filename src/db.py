@@ -1,13 +1,35 @@
 import aiopg
+from typing import Optional
 
 
 def build_dsn():
     dbname = "main"
     user = "postgres"
     password = "postgres"
-    host = "db"
-    port = 5432
+    host = "localhost"
+    port = 5430
     return f"dbname={dbname} user={user} password={password} host={host} port={port}"
+
+
+class ConnectionManager:
+    _instance: Optional['ConnectionManager'] = None
+
+    def __new__(cls, *args, **kwargs):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls, *args, **kwargs)
+        return cls._instance
+
+    def __init__(self):
+        self._connection: aiopg.Connection | None = None
+
+    async def __aenter__(self):
+        if self._connection is None or self._connection.closed:
+            self._connection = await aiopg.connect(build_dsn())
+        return self._connection
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        if self._connection is not None and not self._connection.closed:
+            await self._connection.close()
 
 
 async def get_user_vote(message_id: int | str, user_id: int | str) -> str | None:
@@ -18,7 +40,7 @@ async def get_user_vote(message_id: int | str, user_id: int | str) -> str | None
         "message_id": message_id,
         "user_id": user_id
     }
-    async with aiopg.connect(build_dsn()) as conn:
+    async with ConnectionManager() as conn:
         async with conn.cursor() as cur:
             await cur.execute(stmt, params)
             result = await cur.fetchone()
@@ -45,7 +67,7 @@ async def set_user_vote(message_id: int | str, user_id: int | str, vote: str) ->
         "vote": vote
     }
 
-    async with aiopg.connect(build_dsn()) as conn:
+    async with ConnectionManager() as conn:
         async with conn.cursor() as cur:
             await cur.execute(stmt, params)
 
@@ -70,7 +92,7 @@ async def get_rating(message_id: int | str) -> tuple[int, int]:
         "message_id": message_id,
     }
 
-    async with aiopg.connect(build_dsn()) as conn:
+    async with ConnectionManager() as conn:
         async with conn.cursor() as cur:
             await cur.execute(stmt, params)
             result = await cur.fetchone()
