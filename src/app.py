@@ -151,7 +151,7 @@ async def media_handler(update: Update, context: CallbackContext) -> None:
         chat_id=CHAT_ID_NEW,
         photo=media_file.file_id,
         caption=user_signature,
-        reply_markup=make_keyboard(),
+        # reply_markup=make_keyboard(),
     )
 
     await db.add_post(msg.message_id, user_id)
@@ -168,7 +168,7 @@ async def message_handler(update: Update, context: CallbackContext):
         return
 
     content = f"@{update.message.from_user.username}\n{update.message.text}"
-    msg = await context.bot.send_message(CHAT_ID_NEW, content, reply_markup=make_keyboard())
+    msg = await context.bot.send_message(CHAT_ID_NEW, content)  # , reply_markup=make_keyboard())
     await db.add_post(msg.message_id, user_id)
     logger.info(f"Created new post {msg.message_id} by user {update.message.from_user.username}")
 
