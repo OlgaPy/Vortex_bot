@@ -67,6 +67,13 @@ def make_keyboard(rating: int = 0) -> InlineKeyboardMarkup:
     return keyboad
 
 
+async def start(update: Update, _):
+    """Handler for the /start command."""
+    await update.message.reply_text(
+        'Привет! Отправьте мне текстовое сообщение или фотографию, и я опубликую его в канале.'
+    )
+
+
 async def vote_handler(update: Update, _):
     query = update.callback_query
     updated = False
@@ -84,6 +91,9 @@ async def vote_handler(update: Update, _):
             await query.answer(f"Плюсы: +{rating[0]}\nМинусы: -{rating[1]}")
             return
 
+    logger.debug(
+        f"Received vote \"{query.data}\" from user {query.from_user.username} on post {query.message.message_id}"
+    )
     await query.answer()
     if updated:
         rating = await db.get_rating(query.message.message_id)
@@ -91,6 +101,7 @@ async def vote_handler(update: Update, _):
         await query.edit_message_reply_markup(keyboard)
 
         if is_popular(rating):
+            logger.info(f"Forwarding message {query.message.message_id} to Popular channel")
             await query.message.forward(CHAT_ID_POPULAR)
 
 
@@ -135,13 +146,7 @@ async def media_handler(update: Update, context: CallbackContext) -> None:
     )
 
     await db.add_post(msg.message_id, user_id)
-
-
-async def start(update: Update, _):
-    """Handler for the /start command."""
-    await update.message.reply_text(
-        'Привет! Отправьте мне текстовое сообщение или фотографию, и я опубликую его в канале.'
-    )
+    logger.info(f"Created new post {msg.message_id} by user {username}")
 
 
 async def message_handler(update: Update, context: CallbackContext):
@@ -156,6 +161,7 @@ async def message_handler(update: Update, context: CallbackContext):
     content = f"@{update.message.from_user.username}\n{update.message.text}"
     msg = await context.bot.send_message(CHAT_ID_NEW, content, reply_markup=make_keyboard())
     await db.add_post(msg.message_id, user_id)
+    logger.info(f"Created new post {msg.message_id} by user {update.message.from_user.username}")
 
 
 def main():
@@ -170,5 +176,7 @@ def main():
 
 
 if __name__ == '__main__':
-    threading.Thread(target=flask_app.run, kwargs={"host": "0.0.0.0", "port": 8080}).start()
+
+    flask_thread = threading.Thread(target=flask_app.run, kwargs={"host": "0.0.0.0", "port": 8080})
+    flask_thread.start()
     main()
