@@ -1,13 +1,15 @@
-import aiopg
+import os
 from typing import Optional
+
+import aiopg
 
 
 def build_dsn():
-    dbname = "main"
-    user = "postgres"
-    password = "postgres"
-    host = "localhost"
-    port = 5430
+    dbname = os.getenv('DB_NAME', default="main")
+    user = os.getenv('DB_USER', default="postgres")
+    password = os.getenv('DB_PASSWORD', default="")
+    host = os.getenv('DB_HOST', default="localhost")
+    port = os.getenv('DB_PORT', default="5432")
     return f"dbname={dbname} user={user} password={password} host={host} port={port}"
 
 

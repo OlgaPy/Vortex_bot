@@ -1,6 +1,9 @@
 import enum
 import os
+import threading
+import logging
 
+import flask
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder,
@@ -13,12 +16,41 @@ from telegram.ext import (
 
 import db
 
-TOKEN = os.getenv("BOT_TOKEN")
-CHAT_ID_NEW = os.getenv("BOT_CHAT_ID_NEW")
-CHAT_ID_POPULAR = os.getenv("BOT_CHAT_ID_POPULAR")
+TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+CHAT_ID_NEW = os.getenv("TELEGRAM_CHANNEL_ID")
+CHAT_ID_POPULAR = os.getenv("FORWARD_CHANNEL_ID")
+
+# Set up flask app
+flask_app = flask.Flask(__name__)
+
+# Set up logging to a file and console
+LOG_FILE = os.getenv('LOG_FILE', default='bot.log')
+logging.basicConfig(
+    filename=LOG_FILE,
+    format="%(asctime)s %(levelname)s | [%(name)s] %(message)s",
+    level=logging.INFO
+)
+logging.getLogger("httpx").setLevel(logging.ERROR)
+
+# Create a new console handler
+console_handler = logging.StreamHandler()
+console_handler.setLevel(logging.INFO)
+formatter = logging.Formatter("%(asctime)s %(levelname)s | [%(name)s] %(message)s")
+console_handler.setFormatter(formatter)
+
+# Add the console handler to the root logger
+logging.getLogger().addHandler(console_handler)
+
+logger = logging.getLogger(__name__)
 
 
-class ButtonValues(enum.StrEnum):
+@flask_app.route('/healthz', methods=['GET'])
+def healthcheck() -> tuple[str, int]:
+    """Health check route for the Flask web application."""
+    return 'Health check successful', 200
+
+
+class ButtonValues(str, enum.Enum):
     POSITIVE_VOTE = "+"
     NEGATIVE_VOTE = "-"
     RATING = "="
@@ -105,7 +137,7 @@ async def media_handler(update: Update, context: CallbackContext) -> None:
     await db.add_post(msg.message_id, user_id)
 
 
-async def start(update: Update, context: CallbackContext):
+async def start(update: Update, _):
     """Handler for the /start command."""
     await update.message.reply_text(
         'Привет! Отправьте мне текстовое сообщение или фотографию, и я опубликую его в канале.'
@@ -138,4 +170,5 @@ def main():
 
 
 if __name__ == '__main__':
+    threading.Thread(target=flask_app.run, kwargs={"host": "0.0.0.0", "port": 8080}).start()
     main()
