@@ -18,7 +18,7 @@ CHAT_ID_NEW = os.getenv("BOT_CHAT_ID_NEW")
 CHAT_ID_POPULAR = os.getenv("BOT_CHAT_ID_POPULAR")
 
 
-class ButtonValues(str, enum.Enum):
+class ButtonValues(enum.StrEnum):
     POSITIVE_VOTE = "+"
     NEGATIVE_VOTE = "-"
     RATING = "="
