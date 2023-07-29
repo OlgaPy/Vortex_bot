@@ -104,3 +104,35 @@ async def get_rating(message_id: int | str) -> tuple[int, int]:
         result = await cur.fetchone()
 
     return (result[0], result[1]) if result else None
+
+
+async def add_post(message_id: int | str, user_id: int | str):
+    """Save post information"""
+
+    stmt = "INSERT INTO posts (message_id, user_id, date) VALUES (%(message_id)s, %(user_id)s, now());"
+
+    params = {
+        "message_id": message_id,
+        "user_id": user_id,
+    }
+
+    conn = await ConnectionManager().connection()
+    async with conn.cursor() as cur:
+        await cur.execute(stmt, params)
+
+
+async def get_post_count_for_user(user_id: int | str) -> int:
+    """Fetch post count for last 24 hours"""
+
+    stmt = "SELECT posts_count FROM posts_count_for_last_day WHERE user_id = %(user_id)s"
+
+    params = {
+        "user_id": user_id,
+    }
+
+    conn = await ConnectionManager().connection()
+    async with conn.cursor() as cur:
+        await cur.execute(stmt, params)
+        result = await cur.fetchone()
+
+    return result[0] if result else 0
