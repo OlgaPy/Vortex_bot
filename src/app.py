@@ -19,6 +19,7 @@ import db
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHAT_ID_NEW = os.getenv("TELEGRAM_CHANNEL_ID")
 CHAT_ID_POPULAR = os.getenv("FORWARD_CHANNEL_ID")
+COMMENTS_GROUP_ID = os.getenv("TELEGRAM_COMMENTS_GROUP_ID")
 
 # Set up flask app
 flask_app = flask.Flask(__name__)
@@ -56,15 +57,23 @@ class ButtonValues(str, enum.Enum):
     RATING = "="
 
 
-def make_keyboard(rating: int = 0) -> InlineKeyboardMarkup:
-    keyboad = InlineKeyboardMarkup([
+def make_keyboard(rating: int = 0, tread_id: int = None) -> InlineKeyboardMarkup:
+    keyboad = [
         [
             InlineKeyboardButton("👍", callback_data=ButtonValues.POSITIVE_VOTE),
             InlineKeyboardButton(f"{rating:+0d}", callback_data=ButtonValues.RATING),
             InlineKeyboardButton("👎", callback_data=ButtonValues.NEGATIVE_VOTE)
-        ]
-    ])
-    return keyboad
+        ],
+    ]
+    if tread_id is not None:
+        keyboad.append(
+            [
+                InlineKeyboardButton(
+                    "Комментарии",
+                    url=f"https://t.me/{COMMENTS_GROUP_ID}/{tread_id}/{tread_id}")
+            ]
+        )
+    return InlineKeyboardMarkup(keyboad)
 
 
 async def start(update: Update, _):
@@ -176,7 +185,6 @@ def main():
 
 
 if __name__ == '__main__':
-
     flask_thread = threading.Thread(target=flask_app.run, kwargs={"host": "0.0.0.0", "port": 8080})
     flask_thread.start()
     main()
