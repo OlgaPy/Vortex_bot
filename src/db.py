@@ -45,8 +45,8 @@ async def get_user_vote(message_id: int | str, user_id: int | str) -> str | None
     SELECT vote FROM votes WHERE (message_id, user_id) = (%(message_id)s, %(user_id)s);
     """
     params = {
-        "message_id": message_id,
-        "user_id": user_id
+        "message_id": str(message_id),
+        "user_id": str(user_id)
     }
     conn = await ConnectionManager().connection()
     async with conn.cursor() as cur:
@@ -70,8 +70,8 @@ async def set_user_vote(message_id: int | str, user_id: int | str, vote: str) ->
         return False
 
     params = {
-        "message_id": message_id,
-        "user_id": user_id,
+        "message_id": str(message_id),
+        "user_id": str(user_id),
         "vote": vote
     }
 
@@ -97,7 +97,7 @@ async def get_rating(message_id: int | str) -> tuple[int, int]:
     """
 
     params = {
-        "message_id": message_id,
+        "message_id": str(message_id),
     }
 
     conn = await ConnectionManager().connection()
@@ -114,8 +114,8 @@ async def add_post(message_id: int | str, user_id: int | str):
     stmt = "INSERT INTO posts (message_id, user_id, date) VALUES (%(message_id)s, %(user_id)s, now());"
 
     params = {
-        "message_id": message_id,
-        "user_id": user_id,
+        "message_id": str(message_id),
+        "user_id": str(user_id),
     }
 
     conn = await ConnectionManager().connection()
@@ -129,7 +129,7 @@ async def get_post_count_for_user(user_id: int | str) -> int:
     stmt = "SELECT posts_count FROM posts_count_for_last_day WHERE user_id = %(user_id)s"
 
     params = {
-        "user_id": user_id,
+        "user_id": str(user_id),
     }
 
     conn = await ConnectionManager().connection()

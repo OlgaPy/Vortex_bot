@@ -1,13 +1,13 @@
 CREATE TABLE votes (
-    message_id integer NOT NULL,
-    user_id integer NOT NULL,
+    message_id varchar(32) NOT NULL,
+    user_id varchar(32) NOT NULL,
     vote varchar(1),
     PRIMARY KEY (message_id, user_id)
 );
 
 CREATE TABLE posts (
-    message_id integer PRIMARY KEY,
-    user_id integer NOT NULL,
+    message_id varchar(32) PRIMARY KEY,
+    user_id varchar(32) NOT NULL,
     date timestamp NOT NULL
 );
 
