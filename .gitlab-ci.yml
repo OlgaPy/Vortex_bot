@@ -1,0 +1,31 @@
+stages:
+- build
+#- deploy
+
+build-image:
+  stage: build
+  variables:
+    CONTAINER_REGISTRY: europe-west4-docker.pkg.dev
+    CONTAINER_REPOSITORY: vortex-394210/microservices
+  before_script:
+    - echo kaniko build
+  image:
+    name: gcr.io/kaniko-project/executor:${KANIKO_VERSION}
+    entrypoint: [""]
+  script:
+    - export GOOGLE_APPLICATION_CREDENTIALS=/kaniko/kaniko-secret.json
+    - echo $GCP_ACCOUNT_KEY | base64 -d > $GOOGLE_APPLICATION_CREDENTIALS
+    - /kaniko/executor
+      --cache=true
+      --cache-repo=${CONTAINER_REGISTRY}/${CONTAINER_REPOSITORY}/${CI_PROJECT_NAME}/cache
+      --context $CI_PROJECT_DIR
+      --no-push
+      --tarPath=${CI_PROJECT_NAME}.tar
+      --destination ${CONTAINER_REGISTRY}/${CONTAINER_REPOSITORY}/${CI_PROJECT_NAME}:${CI_COMMIT_REF_SLUG}-${CI_COMMIT_SHORT_SHA}
+  artifacts:
+    paths:
+      - ${CI_PROJECT_NAME}.tar
+  when: manual
+
+#deploy-cloud-run
+#  stage: deploy
