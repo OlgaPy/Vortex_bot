@@ -13,22 +13,28 @@ def build_dsn():
 
 class ConnectionManager:
     _instance: Optional['ConnectionManager'] = None
+    _connection: aiopg.Connection | None = None
 
     def __new__(cls, *args, **kwargs):
         if cls._instance is None:
             cls._instance = super().__new__(cls, *args, **kwargs)
         return cls._instance
 
-    def __init__(self):
-        self._connection: aiopg.Connection | None = None
+    @property
+    def connected(self) -> bool:
+        return self._connection is not None and not self._connection.closed
 
-    async def __aenter__(self):
-        if self._connection is None or self._connection.closed:
+    async def connection(self) -> aiopg.Connection:
+        return await self.__aenter__()
+
+    async def __aenter__(self) -> aiopg.Connection:
+        if not self.connected:
             self._connection = await aiopg.connect(build_dsn())
+
         return self._connection
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
-        if self._connection is not None and not self._connection.closed:
+        if self.connected:
             await self._connection.close()
 
 
@@ -40,10 +46,10 @@ async def get_user_vote(message_id: int | str, user_id: int | str) -> str | None
         "message_id": message_id,
         "user_id": user_id
     }
-    async with ConnectionManager() as conn:
-        async with conn.cursor() as cur:
-            await cur.execute(stmt, params)
-            result = await cur.fetchone()
+    conn = await ConnectionManager().connection()
+    async with conn.cursor() as cur:
+        await cur.execute(stmt, params)
+        result = await cur.fetchone()
 
     return result[0] if result else None
 
@@ -67,9 +73,9 @@ async def set_user_vote(message_id: int | str, user_id: int | str, vote: str) ->
         "vote": vote
     }
 
-    async with ConnectionManager() as conn:
-        async with conn.cursor() as cur:
-            await cur.execute(stmt, params)
+    conn = await ConnectionManager().connection()
+    async with conn.cursor() as cur:
+        await cur.execute(stmt, params)
 
     return True
 
@@ -92,9 +98,9 @@ async def get_rating(message_id: int | str) -> tuple[int, int]:
         "message_id": message_id,
     }
 
-    async with ConnectionManager() as conn:
-        async with conn.cursor() as cur:
-            await cur.execute(stmt, params)
-            result = await cur.fetchone()
+    conn = await ConnectionManager().connection()
+    async with conn.cursor() as cur:
+        await cur.execute(stmt, params)
+        result = await cur.fetchone()
 
     return (result[0], result[1]) if result else None
