@@ -16,5 +16,3 @@ services:
       - .env
     volumes:
       - "./migrations:/docker-entrypoint-initdb.d"
-    ports:
-      - "5430:5432"
