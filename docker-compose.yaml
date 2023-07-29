@@ -6,6 +6,7 @@ services:
     restart: unless-stopped
     env_file:
       - .env
+      - prod.env
     depends_on:
       - db
 
@@ -14,5 +15,6 @@ services:
     restart: unless-stopped
     env_file:
       - .env
+      - prod.env
     volumes:
       - "./migrations:/docker-entrypoint-initdb.d"

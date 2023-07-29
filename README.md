@@ -1,3 +1,6 @@
+# Bot
+Set up your config in .env or prod.env and run
+
 ### Env file
 ```env
 # Telegram vars
@@ -20,4 +23,5 @@ DB_HOST = db
 DB_PORT = 5432
 ```
 
-Run: `docker-compose up`
+### Run
+`docker-compose up`
