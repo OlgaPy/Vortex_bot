@@ -47,11 +47,48 @@ def healthcheck() -> tuple[str, int]:
     return 'Health check successful', 200
 
 
-async def start(update: Update, _):
+async def start_command(update: Update, _):
     """Handler for the /start command."""
     await update.message.reply_text(
         'Привет! Отправьте мне текстовое сообщение или фотографию, и я опубликую его в канале.'
     )
+
+
+async def my_posts_command(update: Update, _):
+    """Handler for /my_posts command"""
+
+    await update.message.reply_text("В разработке!")
+
+
+async def edit_post_command(update: Update, _):
+    """Handler from /edit command"""
+
+    await update.message.reply_text("В разработке!")
+
+
+async def stat_command(update: Update, _):
+    """Handler from /stat command"""
+
+    user_post_count = await db.get_post_count_for_user(update.message.from_user.id)
+    text = ""
+    match user_post_count:
+        case 0:
+            text = "За последние 24 часа от Вас не было постов. Самое время это исправить!"
+        case 1:
+            text = "Сегодня вы запостили одну публикацию. Доступно еще 4."
+        case 2 | 3 | 4:
+            text = f"Сегодня вы запостили {user_post_count} публикации. Доступно еще {5 - user_post_count}."
+        case 5:
+            text = "Сегодня вы сделали целых пять постов, отличная работа! Но пора отдохнуть :)"
+    await update.message.reply_text(text)
+
+
+async def rating_command(update: Update, context: CallbackContext):
+    """Handler from /rating command"""
+
+    rating = await db.get_user_rating(update.message.from_user.id)
+    text = f"Ваш рейтинг: {rating}"
+    await update.message.reply_text(text)
 
 
 async def vote_handler(update: Update, context: CallbackContext):
@@ -222,7 +259,13 @@ async def comments_handler(update: Update, context: CallbackContext):
 def main():
     application = ApplicationBuilder().token(TOKEN).build()
 
-    application.add_handler(CommandHandler("start", start, filters=filters.ChatType.PRIVATE))
+    # commands
+    application.add_handler(CommandHandler("start", start_command, filters=filters.ChatType.PRIVATE))
+    application.add_handler(CommandHandler("stat", stat_command, filters=filters.ChatType.PRIVATE))
+    application.add_handler(CommandHandler("rating", rating_command, filters=filters.ChatType.PRIVATE))
+    application.add_handler(CommandHandler("my_posts", my_posts_command, filters=filters.ChatType.PRIVATE))
+    application.add_handler(CommandHandler("edit", edit_post_command, filters=filters.ChatType.PRIVATE))
+
     application.add_handler(MessageHandler(~filters.COMMAND & filters.TEXT & filters.ChatType.PRIVATE, message_handler))
     application.add_handler(MessageHandler(~filters.COMMAND & filters.PHOTO & filters.ChatType.PRIVATE, media_handler))
     application.add_handler(CallbackQueryHandler(vote_handler))

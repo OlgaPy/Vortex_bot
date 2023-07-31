@@ -220,3 +220,25 @@ async def add_to_popular(message_id: int | str, popular_id: int | str):
     conn = await ConnectionManager().connection()
     async with conn.cursor() as cur:
         await cur.execute(stmt, params)
+
+
+async def get_user_rating(user_id: int | str) -> int:
+    """Calculate user rating"""
+
+    stmt = """
+    SELECT sum(CASE WHEN vote = '+' THEN 1 WHEN vote = '-' THEN -1 ELSE 0 END)
+    FROM posts AS p
+    LEFT JOIN votes AS v on p.message_id = v.message_id
+    WHERE p.user_id = %(user_id)s AND v.user_id != %(user_id)s;
+    """
+
+    params = {
+        "user_id": str(user_id),
+    }
+
+    conn = await ConnectionManager().connection()
+    async with conn.cursor() as cur:
+        await cur.execute(stmt, params)
+        result = await cur.fetchone()
+
+    return result[0] if result else 0
