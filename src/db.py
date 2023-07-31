@@ -2,6 +2,9 @@ import os
 from typing import Optional
 
 import aiopg
+from psycopg2.extras import DictCursor
+
+from models import Post
 
 
 def build_dsn():
@@ -31,7 +34,7 @@ class ConnectionManager:
 
     async def __aenter__(self) -> aiopg.Connection:
         if not self.connected:
-            self._connection = await aiopg.connect(build_dsn())
+            self._connection = await aiopg.connect(build_dsn(), cursor_factory=DictCursor)
 
         return self._connection
 
@@ -108,19 +111,83 @@ async def get_rating(message_id: int | str) -> tuple[int, int]:
     return (result[0], result[1]) if result else None
 
 
-async def add_post(message_id: int | str, user_id: int | str):
+async def add_post(message_id: int | str, user_id: int | str, thread_id: int | str):
     """Save post information"""
 
-    stmt = "INSERT INTO posts (message_id, user_id, date) VALUES (%(message_id)s, %(user_id)s, now());"
+    stmt = """
+    INSERT INTO posts (message_id, user_id, date, comment_thread_id) 
+    VALUES (%(message_id)s, %(user_id)s, now(), %(thread_id)s);
+    """
 
     params = {
         "message_id": str(message_id),
         "user_id": str(user_id),
+        "thread_id": str(thread_id)
     }
 
     conn = await ConnectionManager().connection()
     async with conn.cursor() as cur:
         await cur.execute(stmt, params)
+
+
+async def get_post(message_id: int | str) -> Post:
+    """Fetch post"""
+
+    stmt = """
+    SELECT message_id, user_id, date, comment_thread_id, comments, popular_id
+    FROM posts WHERE message_id = %(message_id)s;
+    """
+
+    params = {
+        "message_id": str(message_id),
+    }
+
+    conn = await ConnectionManager().connection()
+    async with conn.cursor() as cur:
+        await cur.execute(stmt, params)
+        result = await cur.fetchone()
+
+    return Post(**result) if result else None
+
+
+async def get_post_by_popular_id(popular_id: int | str) -> Post:
+    """Fetch post by popular_id"""
+
+    stmt = """
+    SELECT message_id, user_id, date, comment_thread_id, comments, popular_id
+    FROM posts WHERE popular_id = %(popular_id)s;
+    """
+
+    params = {
+        "popular_id": str(popular_id),
+    }
+
+    conn = await ConnectionManager().connection()
+    async with conn.cursor() as cur:
+        await cur.execute(stmt, params)
+        result = await cur.fetchone()
+
+    return Post(**result) if result else None
+
+
+async def increase_comments_counter(thread_id: int | str) -> Post:
+    """Increases comments counter by 1"""
+
+    stmt = """
+    UPDATE posts SET comments = comments + 1 WHERE comment_thread_id = %(thread_id)s
+    RETURNING message_id, user_id, date, comment_thread_id, comments, popular_id;
+    """
+
+    params = {
+        "thread_id": str(thread_id),
+    }
+
+    conn = await ConnectionManager().connection()
+    async with conn.cursor() as cur:
+        await cur.execute(stmt, params)
+        result = await cur.fetchone()
+
+    return Post(**result) if result else None
 
 
 async def get_post_count_for_user(user_id: int | str) -> int:
@@ -138,3 +205,18 @@ async def get_post_count_for_user(user_id: int | str) -> int:
         result = await cur.fetchone()
 
     return result[0] if result else 0
+
+
+async def add_to_popular(message_id: int | str, popular_id: int | str):
+    stmt = """
+    UPDATE posts SET popular_id = %(popular_id)s WHERE message_id = %(message_id)s;
+    """
+
+    params = {
+        "message_id": str(message_id),
+        "popular_id": str(popular_id),
+    }
+
+    conn = await ConnectionManager().connection()
+    async with conn.cursor() as cur:
+        await cur.execute(stmt, params)
