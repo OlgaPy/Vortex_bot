@@ -1,10 +1,9 @@
-import enum
+import logging
 import os
 import threading
-import logging
 
 import flask
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,
     CallbackQueryHandler,
@@ -15,11 +14,8 @@ from telegram.ext import (
 )
 
 import db
-
-TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-CHAT_ID_NEW = os.getenv("TELEGRAM_CHANNEL_ID")
-CHAT_ID_POPULAR = os.getenv("FORWARD_CHANNEL_ID")
-COMMENTS_GROUP_ID = os.getenv("TELEGRAM_COMMENTS_GROUP_ID")
+from config import CHAT_ID_NEW, CHAT_ID_POPULAR, COMMENTS_GROUP_ID, TOKEN
+from models import ButtonValues, PostKeyboard
 
 # Set up flask app
 flask_app = flask.Flask(__name__)
@@ -51,31 +47,6 @@ def healthcheck() -> tuple[str, int]:
     return 'Health check successful', 200
 
 
-class ButtonValues(str, enum.Enum):
-    POSITIVE_VOTE = "+"
-    NEGATIVE_VOTE = "-"
-    RATING = "="
-
-
-def make_keyboard(rating: int = 0, tread_id: int = None) -> InlineKeyboardMarkup:
-    keyboad = [
-        [
-            InlineKeyboardButton("👍", callback_data=ButtonValues.POSITIVE_VOTE),
-            InlineKeyboardButton(f"{rating:+0d}", callback_data=ButtonValues.RATING),
-            InlineKeyboardButton("👎", callback_data=ButtonValues.NEGATIVE_VOTE)
-        ],
-    ]
-    if tread_id is not None:
-        keyboad.append(
-            [
-                InlineKeyboardButton(
-                    "Комментарии",
-                    url=f"https://t.me/{COMMENTS_GROUP_ID}/{tread_id}/{tread_id}")
-            ]
-        )
-    return InlineKeyboardMarkup(keyboad)
-
-
 async def start(update: Update, _):
     """Handler for the /start command."""
     await update.message.reply_text(
@@ -83,35 +54,64 @@ async def start(update: Update, _):
     )
 
 
-async def vote_handler(update: Update, _):
+async def vote_handler(update: Update, context: CallbackContext):
     query = update.callback_query
     updated = False
 
     if not query.data:
         return
 
+    if str(query.message.chat_id) == CHAT_ID_POPULAR:
+        post = await db.get_post_by_popular_id(query.message.message_id)
+    else:
+        post = await db.get_post(query.message.message_id)
+
     match query.data:
         case ButtonValues.POSITIVE_VOTE:
-            updated = await db.set_user_vote(query.message.message_id, query.from_user.id, ButtonValues.POSITIVE_VOTE)
+            updated = await db.set_user_vote(post["message_id"], query.from_user.id, ButtonValues.POSITIVE_VOTE)
         case ButtonValues.NEGATIVE_VOTE:
-            updated = await db.set_user_vote(query.message.message_id, query.from_user.id, ButtonValues.NEGATIVE_VOTE)
+            updated = await db.set_user_vote(post["message_id"], query.from_user.id, ButtonValues.NEGATIVE_VOTE)
         case ButtonValues.RATING:
-            rating = await db.get_rating(query.message.message_id)
-            await query.answer(f"Плюсы: +{rating[0]}\nМинусы: -{rating[1]}")
+            rating = await db.get_rating(post["message_id"])
+            user_vote = await db.get_user_vote(post["message_id"], query.from_user.id)
+            text = f"Плюсы: +{rating[0]}\nМинусы: -{rating[1]}"
+            if user_vote is not None:
+                text += f"\nВаша оценка: {user_vote}"
+            else:
+                text += f"\nВы еще не оценили этот пост"
+            await query.answer(text)
             return
 
     logger.debug(
-        f"Received vote \"{query.data}\" from user {query.from_user.username} on post {query.message.message_id}"
+        f"Received vote \"{query.data}\" from user {query.from_user.username} on post {post['message_id']}"
     )
     await query.answer()
-    if updated:
-        rating = await db.get_rating(query.message.message_id)
-        keyboard = make_keyboard(rating[0] - rating[1])
-        await query.edit_message_reply_markup(keyboard)
+    if not updated:
+        return
 
-        if is_popular(rating):
-            logger.info(f"Forwarding message {query.message.message_id} to Popular channel")
-            await query.message.forward(CHAT_ID_POPULAR)
+    rating = await db.get_rating(post["message_id"])
+    keyboard = PostKeyboard(
+        rating=rating[0] - rating[1],
+        thread_id=post["comment_thread_id"],
+        comments=post["comments"]
+    )
+    await context.bot.edit_message_reply_markup(
+        chat_id=CHAT_ID_NEW,
+        message_id=int(post["message_id"]),
+        reply_markup=keyboard.to_reply_markup()
+    )
+
+    if post.get("popular_id") is not None:
+        await context.bot.edit_message_reply_markup(
+            chat_id=CHAT_ID_POPULAR,
+            message_id=int(post["popular_id"]),
+            reply_markup=keyboard.to_reply_markup()
+        )
+
+    if post.get("popular_id") is None and is_popular(rating):
+        msg = await query.message.copy(CHAT_ID_POPULAR, reply_markup=keyboard.to_reply_markup())
+        await db.add_to_popular(post["message_id"], msg.message_id)
+        logger.info(f"Post {post['message_id']} became popular")
 
 
 def is_popular(rating: tuple[int, int]) -> bool:
@@ -120,8 +120,8 @@ def is_popular(rating: tuple[int, int]) -> bool:
     if rating[0] + rating[1] == 0:
         return False
 
-    # positive votes more than 80% and this is at least 5 positive votes
-    return (rating[0] - rating[1]) / (rating[0] + rating[1]) > 0.8 and rating[0] >= 5
+    # positive votes more than 80% and this is at least 20 positive votes
+    return (rating[0] - rating[1]) / (rating[0] + rating[1]) > 0.8 and rating[0] >= 20
 
 
 async def media_handler(update: Update, context: CallbackContext) -> None:
@@ -140,21 +140,23 @@ async def media_handler(update: Update, context: CallbackContext) -> None:
     user_name = update.message.from_user.first_name  # Get user's first name
     username = update.message.from_user.username  # Get user's username
 
-    user_signature = (
-        f"{user_name}: {caption}" if caption
-        else f"@{username}: {caption}" if username
-        else f"Аноним: {caption}"
-    ) if caption else ""
+    name = f"@{username}" if username else user_name
+    user_signature = f"{name}\n{caption}\n" if caption else f"{name}"
 
     media_file = media_message.photo[-1]
     msg = await context.bot.send_photo(
         chat_id=CHAT_ID_NEW,
         photo=media_file.file_id,
         caption=user_signature,
-        # reply_markup=make_keyboard(),
+        reply_markup=PostKeyboard().to_reply_markup(),
     )
 
-    await db.add_post(msg.message_id, user_id)
+    thread = await msg.copy(COMMENTS_GROUP_ID, disable_notification=True)
+    await context.bot.pin_chat_message(COMMENTS_GROUP_ID, thread.message_id)
+    keyboard = PostKeyboard(thread_id=thread.message_id)
+    await msg.edit_reply_markup(keyboard.to_reply_markup())
+
+    await db.add_post(msg.message_id, user_id, thread.message_id)
     logger.info(f"Created new post {msg.message_id} by user {username}")
 
 
@@ -167,10 +169,54 @@ async def message_handler(update: Update, context: CallbackContext):
         await update.message.reply_text('Вы достигли лимита постов на сегодня (5 постов). Попробуйте завтра!')
         return
 
-    content = f"@{update.message.from_user.username}\n{update.message.text}"
-    msg = await context.bot.send_message(CHAT_ID_NEW, content)  # , reply_markup=make_keyboard())
-    await db.add_post(msg.message_id, user_id)
+    keyboard = PostKeyboard()
+
+    username = update.message.from_user.username
+    user_name = update.message.from_user.first_name
+    caption = update.message.caption
+    name = f"@{username}" if username else user_name
+    user_signature = f"{name}\n{caption}\n" if caption else f"{name}"
+    content = f"{user_signature}\n{update.message.text}"
+    msg = await context.bot.send_message(CHAT_ID_NEW, content, reply_markup=keyboard.to_reply_markup())
+
+    thread = await msg.copy(COMMENTS_GROUP_ID, disable_notification=True)
+    keyboard.thread_id = thread.message_id
+    await context.bot.pin_chat_message(COMMENTS_GROUP_ID, thread.message_id)
+    await msg.edit_reply_markup(keyboard.to_reply_markup())
+
+    await db.add_post(msg.message_id, user_id, thread.message_id)
     logger.info(f"Created new post {msg.message_id} by user {update.message.from_user.username}")
+
+
+async def comments_handler(update: Update, context: CallbackContext):
+    """Handler for user comments"""
+
+    thread_id = update.message.message_thread_id
+    if not thread_id or update.message.pinned_message:
+        return
+
+    logger.info(f"User {update.message.from_user.username} left a comment in {thread_id} thread")
+
+    post = await db.increase_comments_counter(thread_id)
+    rating = await db.get_rating(post["message_id"])
+    keyboard = PostKeyboard(
+        rating=rating[0] - rating[1],
+        thread_id=post["comment_thread_id"],
+        comments=post["comments"]
+    )
+
+    await context.bot.edit_message_reply_markup(
+        chat_id=CHAT_ID_NEW,
+        message_id=int(post["message_id"]),
+        reply_markup=keyboard.to_reply_markup()
+    )
+
+    if post.get("popular_id") is not None:
+        await context.bot.edit_message_reply_markup(
+            chat_id=CHAT_ID_POPULAR,
+            message_id=int(post["popular_id"]),
+            reply_markup=keyboard.to_reply_markup()
+        )
 
 
 def main():
@@ -180,6 +226,7 @@ def main():
     application.add_handler(MessageHandler(~filters.COMMAND & filters.TEXT & filters.ChatType.PRIVATE, message_handler))
     application.add_handler(MessageHandler(~filters.COMMAND & filters.PHOTO & filters.ChatType.PRIVATE, media_handler))
     application.add_handler(CallbackQueryHandler(vote_handler))
+    application.add_handler(MessageHandler(~filters.COMMAND & filters.Chat(int(COMMENTS_GROUP_ID)), comments_handler))
 
     application.run_polling()
 

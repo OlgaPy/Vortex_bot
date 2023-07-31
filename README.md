@@ -5,8 +5,10 @@ Set up your config in .env or prod.env and run
 ```env
 # Telegram vars
 TELEGRAM_BOT_TOKEN=xxx
-TELEGRAM_CHANNEL_ID=@mychannel
-FORWARD_CHANNEL_ID=@myfavoritchannel
+TELEGRAM_CHANNEL_ID=-100id
+TELEGRAM_POPULAR_CHANNEL_ID=-100id
+TELEGRAM_COMMENTS_GROUP_ID=-100id
+TELEGRAM_COMMENTS_GROUP_TAG=@mygroup
 
 # Logging
 LOG_FILE=./logfile.log
@@ -24,4 +26,4 @@ DB_PORT = 5432
 ```
 
 ### Run
-`docker-compose up`
+`docker-compose up --build`
