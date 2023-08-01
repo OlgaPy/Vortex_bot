@@ -137,26 +137,56 @@ async def media_handler(update: Update, context: CallbackContext) -> None:
         await update.message.reply_text('Вы достигли лимита постов на сегодня (5 постов). Попробуйте завтра!')
         return
 
+    media_group = media_message.media_group_id
+    if media_group is not None:
+        post = await db.get_post_by_media_group(media_group)
+        if post is not None:
+            if media_message.photo:
+                await context.bot.send_photo(
+                    photo=update.message.photo[-1],
+                    chat_id=COMMENTS_GROUP_ID,
+                    reply_to_message_id=int(post["comment_thread_id"]),
+                )
+            elif media_message.video:
+                await context.bot.send_video(
+                    video=media_message.video,
+                    chat_id=COMMENTS_GROUP_ID,
+                    reply_to_message_id=int(post["comment_thread_id"]),
+                )
+            else:
+                logger.error(f"Unknown media type in message {media_message}")
+            return
+
     user_name = update.message.from_user.first_name  # Get user's first name
     username = update.message.from_user.username  # Get user's username
 
     name = f"@{username}" if username else user_name
     user_signature = f"{name}\n{caption}\n" if caption else f"{name}"
 
-    media_file = media_message.photo[-1]
-    msg = await context.bot.send_photo(
-        chat_id=CHAT_ID_NEW,
-        photo=media_file.file_id,
-        caption=user_signature,
-        reply_markup=PostKeyboard().to_reply_markup(),
-    )
+    if media_message.photo:
+        msg = await context.bot.send_photo(
+            chat_id=CHAT_ID_NEW,
+            photo=media_message.photo[-1],
+            caption=user_signature,
+            reply_markup=PostKeyboard().to_reply_markup(),
+        )
+    elif media_message.video:
+        msg = await context.bot.send_video(
+            chat_id=CHAT_ID_NEW,
+            video=media_message.video,
+            caption=user_signature,
+            reply_markup=PostKeyboard().to_reply_markup(),
+        )
+    else:
+        logger.error(f"Unknown media type in message {media_message}")
+        return
 
     thread = await msg.copy(COMMENTS_GROUP_ID, disable_notification=True)
     await context.bot.pin_chat_message(COMMENTS_GROUP_ID, thread.message_id)
     keyboard = PostKeyboard(thread_id=thread.message_id)
     await msg.edit_reply_markup(keyboard.to_reply_markup())
 
-    await db.add_post(msg.message_id, user_id, thread.message_id)
+    await db.add_post(msg.message_id, user_id, thread.message_id, media_group)
     logger.info(f"Created new post {msg.message_id} by user {username}")
 
 
@@ -224,7 +254,8 @@ def main():
 
     application.add_handler(CommandHandler("start", start, filters=filters.ChatType.PRIVATE))
     application.add_handler(MessageHandler(~filters.COMMAND & filters.TEXT & filters.ChatType.PRIVATE, message_handler))
-    application.add_handler(MessageHandler(~filters.COMMAND & filters.PHOTO & filters.ChatType.PRIVATE, media_handler))
+    application.add_handler(
+        MessageHandler(~filters.COMMAND & (filters.PHOTO | filters.VIDEO) & filters.ChatType.PRIVATE, media_handler))
     application.add_handler(CallbackQueryHandler(vote_handler))
     application.add_handler(MessageHandler(~filters.COMMAND & filters.Chat(int(COMMENTS_GROUP_ID)), comments_handler))
 
