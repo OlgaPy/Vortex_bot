@@ -1,8 +1,9 @@
 import enum
 from datetime import datetime
-from typing import TypedDict, Self
+from typing import TypedDict
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+
 from config import COMMENTS_GROUP_TAG
 
 
@@ -19,6 +20,7 @@ class Post(TypedDict):
     comment_thread_id: str
     comments: int
     popular_id: str
+    media_group: str
 
 
 class PostKeyboard:
@@ -47,4 +49,3 @@ class PostKeyboard:
             text = "Комментарии 💬" if self.comments == 0 else f"Комментарии ({self.comments}) 💬"
             keyboad.append([InlineKeyboardButton(text=text, url=url)])
         return InlineKeyboardMarkup(keyboad)
-
