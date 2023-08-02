@@ -1,9 +1,10 @@
+import asyncio
 import logging
 import os
 import threading
 
 import flask
-from telegram import Update
+from telegram import Update, Bot
 from telegram.ext import (
     ApplicationBuilder,
     CallbackQueryHandler,
@@ -15,7 +16,7 @@ from telegram.ext import (
 
 import db
 from config import CHAT_ID_NEW, CHAT_ID_POPULAR, COMMENTS_GROUP_ID, TOKEN
-from models import ButtonValues, PostKeyboard
+from models import ButtonValues, PostKeyboard, Post
 
 # Set up flask app
 flask_app = flask.Flask(__name__)
@@ -39,6 +40,8 @@ console_handler.setFormatter(formatter)
 logging.getLogger().addHandler(console_handler)
 
 logger = logging.getLogger(__name__)
+
+media_handler_lock = asyncio.Lock()
 
 
 @flask_app.route('/healthz', methods=['GET'])
@@ -65,6 +68,10 @@ async def vote_handler(update: Update, context: CallbackContext):
         post = await db.get_post_by_popular_id(query.message.message_id)
     else:
         post = await db.get_post(query.message.message_id)
+
+    if post is None:
+        logger.error(f"Can't find post, message_id = {query.message.message_id}")
+        await query.answer("Ошибка: не найдена информация о посте")
 
     match query.data:
         case ButtonValues.POSITIVE_VOTE:
@@ -95,18 +102,7 @@ async def vote_handler(update: Update, context: CallbackContext):
         thread_id=post["comment_thread_id"],
         comments=post["comments"]
     )
-    await context.bot.edit_message_reply_markup(
-        chat_id=CHAT_ID_NEW,
-        message_id=int(post["message_id"]),
-        reply_markup=keyboard.to_reply_markup()
-    )
-
-    if post.get("popular_id") is not None:
-        await context.bot.edit_message_reply_markup(
-            chat_id=CHAT_ID_POPULAR,
-            message_id=int(post["popular_id"]),
-            reply_markup=keyboard.to_reply_markup()
-        )
+    await update_post_keyboard(post, context.bot, keyboard)
 
     if post.get("popular_id") is None and is_popular(rating):
         msg = await query.message.copy(CHAT_ID_POPULAR, reply_markup=keyboard.to_reply_markup())
@@ -126,67 +122,70 @@ def is_popular(rating: tuple[int, int]) -> bool:
 
 async def media_handler(update: Update, context: CallbackContext) -> None:
     """Handler for media files (photos)."""
-    user_id: int = update.message.from_user.id
-    media_message = update.message
-    caption: str | None = media_message.caption
 
-    # Check the user's post count for today in the database
-    user_post_count = await db.get_post_count_for_user(user_id)
+    async with media_handler_lock:
+        media_message = update.message
 
-    if user_post_count >= 5:
-        await update.message.reply_text('Вы достигли лимита постов на сегодня (5 постов). Попробуйте завтра!')
-        return
+        media_group = media_message.media_group_id
+        if media_group is not None:
+            post = await db.get_post_by_media_group(media_group)
+            if post is not None:
+                if media_message.photo:
+                    await context.bot.send_photo(
+                        photo=update.message.photo[-1],
+                        chat_id=COMMENTS_GROUP_ID,
+                        reply_to_message_id=int(post["comment_thread_id"]),
+                    )
+                elif media_message.video:
+                    await context.bot.send_video(
+                        video=media_message.video,
+                        chat_id=COMMENTS_GROUP_ID,
+                        reply_to_message_id=int(post["comment_thread_id"]),
+                    )
+                else:
+                    logger.error(f"Unknown media type in message {media_message}")
+                return
 
-    media_group = media_message.media_group_id
-    if media_group is not None:
-        post = await db.get_post_by_media_group(media_group)
-        if post is not None:
-            if media_message.photo:
-                await context.bot.send_photo(
-                    photo=update.message.photo[-1],
-                    chat_id=COMMENTS_GROUP_ID,
-                    reply_to_message_id=int(post["comment_thread_id"]),
-                )
-            elif media_message.video:
-                await context.bot.send_video(
-                    video=media_message.video,
-                    chat_id=COMMENTS_GROUP_ID,
-                    reply_to_message_id=int(post["comment_thread_id"]),
-                )
-            else:
-                logger.error(f"Unknown media type in message {media_message}")
+        user_id: int = update.message.from_user.id
+        caption: str | None = media_message.caption
+
+        # Check the user's post count for today in the database
+        user_post_count = await db.get_post_count_for_user(user_id)
+
+        if user_post_count >= 5:
+            await update.message.reply_text('Вы достигли лимита постов на сегодня (5 постов). Попробуйте завтра!')
             return
 
-    user_name = update.message.from_user.first_name  # Get user's first name
-    username = update.message.from_user.username  # Get user's username
+        user_name = update.message.from_user.first_name  # Get user's first name
+        username = update.message.from_user.username  # Get user's username
 
-    name = f"@{username}" if username else user_name
-    user_signature = f"{name}\n{caption}\n" if caption else f"{name}"
+        name = f"@{username}" if username else user_name
+        user_signature = f"{name}\n{caption}\n" if caption else f"{name}"
 
-    if media_message.photo:
-        msg = await context.bot.send_photo(
-            chat_id=CHAT_ID_NEW,
-            photo=media_message.photo[-1],
-            caption=user_signature,
-            reply_markup=PostKeyboard().to_reply_markup(),
-        )
-    elif media_message.video:
-        msg = await context.bot.send_video(
-            chat_id=CHAT_ID_NEW,
-            video=media_message.video,
-            caption=user_signature,
-            reply_markup=PostKeyboard().to_reply_markup(),
-        )
-    else:
-        logger.error(f"Unknown media type in message {media_message}")
-        return
+        if media_message.photo:
+            msg = await context.bot.send_photo(
+                chat_id=CHAT_ID_NEW,
+                photo=media_message.photo[-1],
+                caption=user_signature,
+                reply_markup=PostKeyboard().to_reply_markup(),
+            )
+        elif media_message.video:
+            msg = await context.bot.send_video(
+                chat_id=CHAT_ID_NEW,
+                video=media_message.video,
+                caption=user_signature,
+                reply_markup=PostKeyboard().to_reply_markup(),
+            )
+        else:
+            logger.error(f"Unknown media type in message {media_message}")
+            return
 
-    thread = await msg.copy(COMMENTS_GROUP_ID, disable_notification=True)
-    await context.bot.pin_chat_message(COMMENTS_GROUP_ID, thread.message_id)
-    keyboard = PostKeyboard(thread_id=thread.message_id)
-    await msg.edit_reply_markup(keyboard.to_reply_markup())
+        thread = await msg.copy(COMMENTS_GROUP_ID, disable_notification=True)
+        await context.bot.pin_chat_message(COMMENTS_GROUP_ID, thread.message_id)
+        keyboard = PostKeyboard(thread_id=thread.message_id)
+        await msg.edit_reply_markup(keyboard.to_reply_markup())
 
-    await db.add_post(msg.message_id, user_id, thread.message_id, media_group)
+        await db.add_post(msg.message_id, user_id, thread.message_id, media_group)
     logger.info(f"Created new post {msg.message_id} by user {username}")
 
 
@@ -234,15 +233,18 @@ async def comments_handler(update: Update, context: CallbackContext):
         thread_id=post["comment_thread_id"],
         comments=post["comments"]
     )
+    await update_post_keyboard(post, context.bot, keyboard)
 
-    await context.bot.edit_message_reply_markup(
+
+async def update_post_keyboard(post: Post, bot: Bot, keyboard: PostKeyboard):
+    await bot.edit_message_reply_markup(
         chat_id=CHAT_ID_NEW,
         message_id=int(post["message_id"]),
         reply_markup=keyboard.to_reply_markup()
     )
 
     if post.get("popular_id") is not None:
-        await context.bot.edit_message_reply_markup(
+        await bot.edit_message_reply_markup(
             chat_id=CHAT_ID_POPULAR,
             message_id=int(post["popular_id"]),
             reply_markup=keyboard.to_reply_markup()
