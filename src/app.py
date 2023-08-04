@@ -22,6 +22,7 @@ from config import (
     MAX_USER_POST_COUNT_PER_DAY,
     POPULAR_POSITIVE_VOTES_PERCENTAGE,
     POPULAR_POSITIVE_VOTES_MIN_COUNT,
+    WELCOME_TEXT,
 )
 from helpers import plural_ru
 from models import ButtonValues, PostKeyboard
@@ -55,13 +56,9 @@ def healthcheck() -> tuple[str, int]:
     """Health check route for the Flask web application."""
     return 'Health check successful', 200
 
-
 async def start(update: Update, _):
     """Handler for the /start command."""
-    await update.message.reply_text(
-        'Привет! Отправьте мне текстовое сообщение, фотографию '
-        'или видео, и я опубликую его в канале.'
-    )
+    await update.message.reply_text(WELCOME_TEXT)
 
 
 async def vote_handler(update: Update, context: CallbackContext):
@@ -207,6 +204,9 @@ async def media_handler(update: Update, context: CallbackContext) -> None:
     await msg.edit_reply_markup(keyboard.to_reply_markup())
 
     await db.add_post(msg.message_id, user_id, thread.message_id, media_group)
+
+    await post_feedback(update, user_post_count)
+
     logger.info(f"Created new post {msg.message_id} by user {username}")
 
 
@@ -239,6 +239,9 @@ async def message_handler(update: Update, context: CallbackContext):
     await msg.edit_reply_markup(keyboard.to_reply_markup())
 
     await db.add_post(msg.message_id, user_id, thread.message_id)
+
+    await post_feedback(update, user_post_count)
+
     logger.info(f"Created new post {msg.message_id} by user {update.message.from_user.username}")
 
 
@@ -271,6 +274,16 @@ async def comments_handler(update: Update, context: CallbackContext):
             message_id=int(post["popular_id"]),
             reply_markup=keyboard.to_reply_markup()
         )
+
+
+async def post_feedback(update: Update, user_post_count: int):
+    posts_limit_left = MAX_USER_POST_COUNT_PER_DAY - user_post_count
+    plural_posts_msg = plural_ru(posts_limit_left, ["пост", "поста", "постов"])
+    await update.message.reply_text(
+        f"Ваш пост добавлен! Найти его можно здесь - https://t.me/new_kapibara\n"
+        "Сегодня вы еще можете опубликовать "
+        f"{posts_limit_left} {plural_posts_msg}."
+    )
 
 
 def main():
