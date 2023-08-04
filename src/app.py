@@ -14,7 +14,16 @@ from telegram.ext import (
 )
 
 import db
-from config import CHAT_ID_NEW, CHAT_ID_POPULAR, COMMENTS_GROUP_ID, TOKEN
+from config import (
+    CHAT_ID_NEW, 
+    CHAT_ID_POPULAR, 
+    COMMENTS_GROUP_ID, 
+    TOKEN,
+    MAX_USER_POST_COUNT_PER_DAY,
+    POPULAR_POSITIVE_VOTES_PERCENTAGE,
+    POPULAR_POSITIVE_VOTES_MIN_COUNT,
+)
+from helpers import plural_ru
 from models import ButtonValues, PostKeyboard
 
 # Set up flask app
@@ -50,7 +59,8 @@ def healthcheck() -> tuple[str, int]:
 async def start(update: Update, _):
     """Handler for the /start command."""
     await update.message.reply_text(
-        'Привет! Отправьте мне текстовое сообщение или фотографию, и я опубликую его в канале.'
+        'Привет! Отправьте мне текстовое сообщение, фотографию '
+        'или видео, и я опубликую его в канале.'
     )
 
 
@@ -117,11 +127,17 @@ async def vote_handler(update: Update, context: CallbackContext):
 def is_popular(rating: tuple[int, int]) -> bool:
     """Checks if message is situatable for popular"""
 
-    if rating[0] + rating[1] == 0:
+    positive_votes, negative_votes = rating
+    if positive_votes + negative_votes == 0:
         return False
+    
+    positive_votes_percentage = positive_votes / (positive_votes + negative_votes) * 100
 
     # positive votes more than 80% and this is at least 20 positive votes
-    return rating[0] / (rating[0] + rating[1]) > 0.8 and rating[0] >= 20
+    return (
+        positive_votes_percentage > POPULAR_POSITIVE_VOTES_PERCENTAGE 
+        and positive_votes >= POPULAR_POSITIVE_VOTES_MIN_COUNT
+    )
 
 
 async def media_handler(update: Update, context: CallbackContext) -> None:
@@ -133,8 +149,12 @@ async def media_handler(update: Update, context: CallbackContext) -> None:
     # Check the user's post count for today in the database
     user_post_count = await db.get_post_count_for_user(user_id)
 
-    if user_post_count >= 5:
-        await update.message.reply_text('Вы достигли лимита постов на сегодня (5 постов). Попробуйте завтра!')
+    if user_post_count >= MAX_USER_POST_COUNT_PER_DAY:
+        plural_posts_msg = plural_ru(MAX_USER_POST_COUNT_PER_DAY, ["пост", "поста", "постов"])
+        await update.message.reply_text(
+            'Вы достигли лимита постов на сегодня '
+            f'({MAX_USER_POST_COUNT_PER_DAY} {plural_posts_msg}). Попробуйте завтра!'
+        )
         return
 
     media_group = media_message.media_group_id
@@ -195,8 +215,12 @@ async def message_handler(update: Update, context: CallbackContext):
     # Check the user's post count for today in the database
     user_post_count = await db.get_post_count_for_user(update.message.from_user.id)
 
-    if user_post_count >= 5:
-        await update.message.reply_text('Вы достигли лимита постов на сегодня (5 постов). Попробуйте завтра!')
+    if user_post_count >= MAX_USER_POST_COUNT_PER_DAY:
+        plural_posts_msg = plural_ru(MAX_USER_POST_COUNT_PER_DAY, ["пост", "поста", "постов"])
+        await update.message.reply_text(
+            'Вы достигли лимита постов на сегодня '
+            f'({MAX_USER_POST_COUNT_PER_DAY} {plural_posts_msg}). Попробуйте завтра!'
+        )
         return
 
     keyboard = PostKeyboard()
@@ -250,7 +274,19 @@ async def comments_handler(update: Update, context: CallbackContext):
 
 
 def main():
-    application = ApplicationBuilder().token(TOKEN).build()
+    application = (
+        ApplicationBuilder()
+        .token(TOKEN)
+        .connect_timeout(10)  # default 5s
+        .read_timeout(30)  # default 5s
+        .write_timeout(30)  # default 5s
+        .get_updates_connect_timeout(60)  # default 5s
+        .get_updates_pool_timeout(60)  # default 1s
+        .get_updates_read_timeout(60)  # default 5s
+        .get_updates_write_timeout(60)  # default 5s
+        .pool_timeout(10)  # default 1s
+        .build()
+    )
 
     application.add_handler(CommandHandler("start", start, filters=filters.ChatType.PRIVATE))
     application.add_handler(MessageHandler(~filters.COMMAND & filters.TEXT & filters.ChatType.PRIVATE, message_handler))
@@ -259,7 +295,12 @@ def main():
     application.add_handler(CallbackQueryHandler(vote_handler))
     application.add_handler(MessageHandler(~filters.COMMAND & filters.Chat(int(COMMENTS_GROUP_ID)), comments_handler))
 
-    application.run_polling()
+    application.run_polling(
+        allowed_updates=[
+            Update.MESSAGE, 
+            Update.CALLBACK_QUERY,
+        ]
+    )
 
 
 if __name__ == '__main__':
