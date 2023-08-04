@@ -87,16 +87,7 @@ async def set_user_vote(message_id: int | str, user_id: int | str, vote: str) ->
 
 async def get_rating(message_id: int | str) -> tuple[int, int]:
     stmt = """
-    WITH 
-        up_votes AS (
-            SELECT count(*) AS votes FROM votes WHERE message_id = %(message_id)s AND vote = '+'
-        ),
-        down_votes AS (
-            SELECT count(*) votes FROM votes WHERE message_id = %(message_id)s AND vote = '-'
-        )
-    SELECT u.votes AS "up_votes", d.votes AS "down_votes" 
-    FROM up_votes AS u 
-    CROSS JOIN down_votes AS d;
+    SELECT vote, COUNT(vote) FROM votes WHERE message_id = %(message_id)s GROUP BY vote;
     """
 
     params = {
@@ -106,9 +97,10 @@ async def get_rating(message_id: int | str) -> tuple[int, int]:
     conn = await ConnectionManager().connection()
     async with conn.cursor() as cur:
         await cur.execute(stmt, params)
-        result = await cur.fetchone()
-
-    return (result[0], result[1]) if result else None
+        result = await cur.fetchall()
+    
+    result = dict(result)
+    return result.get("+", 0), result.get("-", 0)
 
 
 async def add_post(
