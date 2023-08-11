@@ -1,10 +1,9 @@
-import asyncio
 import logging
 import os
 import threading
 
 import flask
-from telegram import Update, Bot
+from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,
     CallbackQueryHandler,
@@ -15,8 +14,18 @@ from telegram.ext import (
 )
 
 import db
-from config import CHAT_ID_NEW, CHAT_ID_POPULAR, COMMENTS_GROUP_ID, TOKEN
-from models import ButtonValues, PostKeyboard, Post
+from config import (
+    CHAT_ID_NEW, 
+    CHAT_ID_POPULAR, 
+    COMMENTS_GROUP_ID, 
+    TOKEN,
+    MAX_USER_POST_COUNT_PER_DAY,
+    POPULAR_POSITIVE_VOTES_PERCENTAGE,
+    POPULAR_POSITIVE_VOTES_MIN_COUNT,
+    WELCOME_TEXT,
+)
+from helpers import plural_ru
+from models import ButtonValues, PostKeyboard
 
 # Set up flask app
 flask_app = flask.Flask(__name__)
@@ -41,20 +50,15 @@ logging.getLogger().addHandler(console_handler)
 
 logger = logging.getLogger(__name__)
 
-media_handler_lock = asyncio.Lock()
-
 
 @flask_app.route('/healthz', methods=['GET'])
 def healthcheck() -> tuple[str, int]:
     """Health check route for the Flask web application."""
     return 'Health check successful', 200
 
-
 async def start(update: Update, _):
     """Handler for the /start command."""
-    await update.message.reply_text(
-        'Привет! Отправьте мне текстовое сообщение или фотографию, и я опубликую его в канале.'
-    )
+    await update.message.reply_text(WELCOME_TEXT)
 
 
 async def vote_handler(update: Update, context: CallbackContext):
@@ -68,10 +72,6 @@ async def vote_handler(update: Update, context: CallbackContext):
         post = await db.get_post_by_popular_id(query.message.message_id)
     else:
         post = await db.get_post(query.message.message_id)
-
-    if post is None:
-        logger.error(f"Can't find post, message_id = {query.message.message_id}")
-        await query.answer("Ошибка: не найдена информация о посте")
 
     match query.data:
         case ButtonValues.POSITIVE_VOTE:
@@ -102,7 +102,18 @@ async def vote_handler(update: Update, context: CallbackContext):
         thread_id=post["comment_thread_id"],
         comments=post["comments"]
     )
-    await update_post_keyboard(post, context.bot, keyboard)
+    await context.bot.edit_message_reply_markup(
+        chat_id=CHAT_ID_NEW,
+        message_id=int(post["message_id"]),
+        reply_markup=keyboard.to_reply_markup()
+    )
+
+    if post.get("popular_id") is not None:
+        await context.bot.edit_message_reply_markup(
+            chat_id=CHAT_ID_POPULAR,
+            message_id=int(post["popular_id"]),
+            reply_markup=keyboard.to_reply_markup()
+        )
 
     if post.get("popular_id") is None and is_popular(rating):
         msg = await query.message.copy(CHAT_ID_POPULAR, reply_markup=keyboard.to_reply_markup())
@@ -113,79 +124,89 @@ async def vote_handler(update: Update, context: CallbackContext):
 def is_popular(rating: tuple[int, int]) -> bool:
     """Checks if message is situatable for popular"""
 
-    if rating[0] + rating[1] == 0:
+    positive_votes, negative_votes = rating
+    if positive_votes + negative_votes == 0:
         return False
+    
+    positive_votes_percentage = positive_votes / (positive_votes + negative_votes) * 100
 
     # positive votes more than 80% and this is at least 20 positive votes
-    return rating[0] / (rating[0] + rating[1]) > 0.8 and rating[0] >= 20
+    return (
+        positive_votes_percentage > POPULAR_POSITIVE_VOTES_PERCENTAGE 
+        and positive_votes >= POPULAR_POSITIVE_VOTES_MIN_COUNT
+    )
 
 
 async def media_handler(update: Update, context: CallbackContext) -> None:
     """Handler for media files (photos)."""
+    user_id: int = update.message.from_user.id
+    media_message = update.message
+    caption: str | None = media_message.caption
 
-    async with media_handler_lock:
-        media_message = update.message
+    # Check the user's post count for today in the database
+    user_post_count = await db.get_post_count_for_user(user_id)
 
-        media_group = media_message.media_group_id
-        if media_group is not None:
-            post = await db.get_post_by_media_group(media_group)
-            if post is not None:
-                if media_message.photo:
-                    await context.bot.send_photo(
-                        photo=update.message.photo[-1],
-                        chat_id=COMMENTS_GROUP_ID,
-                        reply_to_message_id=int(post["comment_thread_id"]),
-                    )
-                elif media_message.video:
-                    await context.bot.send_video(
-                        video=media_message.video,
-                        chat_id=COMMENTS_GROUP_ID,
-                        reply_to_message_id=int(post["comment_thread_id"]),
-                    )
-                else:
-                    logger.error(f"Unknown media type in message {media_message}")
-                return
+    if user_post_count >= MAX_USER_POST_COUNT_PER_DAY:
+        plural_posts_msg = plural_ru(MAX_USER_POST_COUNT_PER_DAY, ["пост", "поста", "постов"])
+        await update.message.reply_text(
+            'Вы достигли лимита постов на сегодня '
+            f'({MAX_USER_POST_COUNT_PER_DAY} {plural_posts_msg}). Попробуйте завтра!'
+        )
+        return
 
-        user_id: int = update.message.from_user.id
-        caption: str | None = media_message.caption
-
-        # Check the user's post count for today in the database
-        user_post_count = await db.get_post_count_for_user(user_id)
-
-        if user_post_count >= 5:
-            await update.message.reply_text('Вы достигли лимита постов на сегодня (5 постов). Попробуйте завтра!')
+    media_group = media_message.media_group_id
+    if media_group is not None:
+        post = await db.get_post_by_media_group(media_group)
+        if post is not None:
+            if media_message.photo:
+                await context.bot.send_photo(
+                    photo=update.message.photo[-1],
+                    chat_id=COMMENTS_GROUP_ID,
+                    reply_to_message_id=int(post["comment_thread_id"]),
+                )
+            elif media_message.video:
+                await context.bot.send_video(
+                    video=media_message.video,
+                    chat_id=COMMENTS_GROUP_ID,
+                    reply_to_message_id=int(post["comment_thread_id"]),
+                )
+            else:
+                logger.error(f"Unknown media type in message {media_message}")
             return
 
-        user_name = update.message.from_user.first_name  # Get user's first name
-        username = update.message.from_user.username  # Get user's username
+    user_name = update.message.from_user.first_name  # Get user's first name
+    username = update.message.from_user.username  # Get user's username
 
-        name = f"@{username}" if username else user_name
-        user_signature = f"{name}\n{caption}\n" if caption else f"{name}"
+    name = f"@{username}" if username else user_name
+    user_signature = f"{name}\n{caption}\n" if caption else f"{name}"
 
-        if media_message.photo:
-            msg = await context.bot.send_photo(
-                chat_id=CHAT_ID_NEW,
-                photo=media_message.photo[-1],
-                caption=user_signature,
-                reply_markup=PostKeyboard().to_reply_markup(),
-            )
-        elif media_message.video:
-            msg = await context.bot.send_video(
-                chat_id=CHAT_ID_NEW,
-                video=media_message.video,
-                caption=user_signature,
-                reply_markup=PostKeyboard().to_reply_markup(),
-            )
-        else:
-            logger.error(f"Unknown media type in message {media_message}")
-            return
+    if media_message.photo:
+        msg = await context.bot.send_photo(
+            chat_id=CHAT_ID_NEW,
+            photo=media_message.photo[-1],
+            caption=user_signature,
+            reply_markup=PostKeyboard().to_reply_markup(),
+        )
+    elif media_message.video:
+        msg = await context.bot.send_video(
+            chat_id=CHAT_ID_NEW,
+            video=media_message.video,
+            caption=user_signature,
+            reply_markup=PostKeyboard().to_reply_markup(),
+        )
+    else:
+        logger.error(f"Unknown media type in message {media_message}")
+        return
 
-        thread = await msg.copy(COMMENTS_GROUP_ID, disable_notification=True)
-        await context.bot.pin_chat_message(COMMENTS_GROUP_ID, thread.message_id)
-        keyboard = PostKeyboard(thread_id=thread.message_id)
-        await msg.edit_reply_markup(keyboard.to_reply_markup())
+    thread = await msg.copy(COMMENTS_GROUP_ID, disable_notification=True)
+    await context.bot.pin_chat_message(COMMENTS_GROUP_ID, thread.message_id)
+    keyboard = PostKeyboard(thread_id=thread.message_id)
+    await msg.edit_reply_markup(keyboard.to_reply_markup())
 
-        await db.add_post(msg.message_id, user_id, thread.message_id, media_group)
+    await db.add_post(msg.message_id, user_id, thread.message_id, media_group)
+
+    await post_feedback(update, user_post_count)
+
     logger.info(f"Created new post {msg.message_id} by user {username}")
 
 
@@ -194,8 +215,12 @@ async def message_handler(update: Update, context: CallbackContext):
     # Check the user's post count for today in the database
     user_post_count = await db.get_post_count_for_user(update.message.from_user.id)
 
-    if user_post_count >= 5:
-        await update.message.reply_text('Вы достигли лимита постов на сегодня (5 постов). Попробуйте завтра!')
+    if user_post_count >= MAX_USER_POST_COUNT_PER_DAY:
+        plural_posts_msg = plural_ru(MAX_USER_POST_COUNT_PER_DAY, ["пост", "поста", "постов"])
+        await update.message.reply_text(
+            'Вы достигли лимита постов на сегодня '
+            f'({MAX_USER_POST_COUNT_PER_DAY} {plural_posts_msg}). Попробуйте завтра!'
+        )
         return
 
     keyboard = PostKeyboard()
@@ -214,6 +239,9 @@ async def message_handler(update: Update, context: CallbackContext):
     await msg.edit_reply_markup(keyboard.to_reply_markup())
 
     await db.add_post(msg.message_id, user_id, thread.message_id)
+
+    await post_feedback(update, user_post_count)
+
     logger.info(f"Created new post {msg.message_id} by user {update.message.from_user.username}")
 
 
@@ -233,26 +261,45 @@ async def comments_handler(update: Update, context: CallbackContext):
         thread_id=post["comment_thread_id"],
         comments=post["comments"]
     )
-    await update_post_keyboard(post, context.bot, keyboard)
 
-
-async def update_post_keyboard(post: Post, bot: Bot, keyboard: PostKeyboard):
-    await bot.edit_message_reply_markup(
+    await context.bot.edit_message_reply_markup(
         chat_id=CHAT_ID_NEW,
         message_id=int(post["message_id"]),
         reply_markup=keyboard.to_reply_markup()
     )
 
     if post.get("popular_id") is not None:
-        await bot.edit_message_reply_markup(
+        await context.bot.edit_message_reply_markup(
             chat_id=CHAT_ID_POPULAR,
             message_id=int(post["popular_id"]),
             reply_markup=keyboard.to_reply_markup()
         )
 
 
+async def post_feedback(update: Update, user_post_count: int):
+    posts_limit_left = MAX_USER_POST_COUNT_PER_DAY - user_post_count
+    plural_posts_msg = plural_ru(posts_limit_left, ["пост", "поста", "постов"])
+    await update.message.reply_text(
+        f"Ваш пост добавлен! Найти его можно здесь - https://t.me/new_kapibara\n"
+        "Сегодня вы еще можете опубликовать "
+        f"{posts_limit_left} {plural_posts_msg}."
+    )
+
+
 def main():
-    application = ApplicationBuilder().token(TOKEN).build()
+    application = (
+        ApplicationBuilder()
+        .token(TOKEN)
+        .connect_timeout(10)  # default 5s
+        .read_timeout(30)  # default 5s
+        .write_timeout(30)  # default 5s
+        .get_updates_connect_timeout(60)  # default 5s
+        .get_updates_pool_timeout(60)  # default 1s
+        .get_updates_read_timeout(60)  # default 5s
+        .get_updates_write_timeout(60)  # default 5s
+        .pool_timeout(10)  # default 1s
+        .build()
+    )
 
     application.add_handler(CommandHandler("start", start, filters=filters.ChatType.PRIVATE))
     application.add_handler(MessageHandler(~filters.COMMAND & filters.TEXT & filters.ChatType.PRIVATE, message_handler))
@@ -261,7 +308,12 @@ def main():
     application.add_handler(CallbackQueryHandler(vote_handler))
     application.add_handler(MessageHandler(~filters.COMMAND & filters.Chat(int(COMMENTS_GROUP_ID)), comments_handler))
 
-    application.run_polling()
+    application.run_polling(
+        allowed_updates=[
+            Update.MESSAGE, 
+            Update.CALLBACK_QUERY,
+        ]
+    )
 
 
 if __name__ == '__main__':
