@@ -132,7 +132,7 @@ async def get_post(message_id: int | str) -> Post:
     """Fetch post"""
 
     stmt = """
-    SELECT message_id, user_id, date, comment_thread_id, comments, popular_id, media_group
+    SELECT message_id, user_id, date, comment_thread_id, comment_count, popular_id, best_id, media_group
     FROM posts WHERE message_id = %(message_id)s;
     """
 
@@ -152,7 +152,7 @@ async def get_post_by_popular_id(popular_id: int | str) -> Post:
     """Fetch post by popular_id"""
 
     stmt = """
-    SELECT message_id, user_id, date, comment_thread_id, comments, popular_id, media_group
+    SELECT message_id, user_id, date, comment_thread_id, comment_count, popular_id, best_id, media_group
     FROM posts WHERE popular_id = %(popular_id)s;
     """
 
@@ -167,12 +167,31 @@ async def get_post_by_popular_id(popular_id: int | str) -> Post:
 
     return Post(**result) if result else None
 
+async def get_post_by_best_id(best_id: int | str) -> Post:
+    """Fetch post by best_id"""
+
+    stmt = """
+    SELECT message_id, user_id, date, comment_thread_id, comment_count, popular_id, best_id, media_group
+    FROM posts WHERE best_id = %(best_id)s;
+    """
+
+    params = {
+        "best_id": str(best_id),
+    }
+
+    conn = await ConnectionManager().connection()
+    async with conn.cursor() as cur:
+        await cur.execute(stmt, params)
+        result = await cur.fetchone()
+
+    return Post(**result) if result else None
+
 
 async def get_post_by_media_group(media_group: str) -> Post:
     """Fetch post by group_id"""
 
     stmt = """
-    SELECT message_id, user_id, date, comment_thread_id, comments, popular_id, media_group
+    SELECT message_id, user_id, date, comment_thread_id, comment_count, popular_id, best_id, media_group
     FROM posts WHERE media_group = %(media_group)s;
     """
 
@@ -192,8 +211,8 @@ async def increase_comments_counter(thread_id: int | str) -> Post:
     """Increases comments counter by 1"""
 
     stmt = """
-    UPDATE posts SET comments = comments + 1 WHERE comment_thread_id = %(thread_id)s
-    RETURNING message_id, user_id, date, comment_thread_id, comments, popular_id, media_group;
+    UPDATE posts SET comment_count = comment_count + 1 WHERE comment_thread_id = %(thread_id)s
+    RETURNING message_id, user_id, date, comment_thread_id, comment_count, popular_id, best_id, media_group;
     """
 
     params = {
@@ -233,6 +252,20 @@ async def add_to_popular(message_id: int | str, popular_id: int | str):
     params = {
         "message_id": str(message_id),
         "popular_id": str(popular_id),
+    }
+
+    conn = await ConnectionManager().connection()
+    async with conn.cursor() as cur:
+        await cur.execute(stmt, params)
+
+async def add_to_best(message_id: int | str, best_id: int | str):
+    stmt = """
+    UPDATE posts SET best_id = %(best_id)s WHERE message_id = %(message_id)s;
+    """
+
+    params = {
+        "message_id": str(message_id),
+        "best_id": str(best_id),
     }
 
     conn = await ConnectionManager().connection()

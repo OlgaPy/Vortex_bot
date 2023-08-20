@@ -17,11 +17,16 @@ import db
 from config import (
     CHAT_ID_NEW, 
     CHAT_ID_POPULAR, 
+    CHAT_ID_BEST,
+    BEST_CHANNEL_TOPIC_MESSAGE_ID,
     COMMENTS_GROUP_ID, 
     TOKEN,
     MAX_USER_POST_COUNT_PER_DAY,
     POPULAR_POSITIVE_VOTES_PERCENTAGE,
     POPULAR_POSITIVE_VOTES_MIN_COUNT,
+    BEST_POSITIVE_VOTES_PERCENTAGE,
+    BEST_POSITIVE_VOTES_MIN_COUNT,
+    BEST_COMMENT_MIN_COUNT,
     WELCOME_TEXT,
 )
 from helpers import plural_ru
@@ -68,7 +73,11 @@ async def vote_handler(update: Update, context: CallbackContext):
     if not query.data:
         return
 
-    if str(query.message.chat_id) == CHAT_ID_POPULAR:
+    chat_id, chat_username = str(query.message.chat_id), f"@{query.message.chat.username}"
+
+    if CHAT_ID_BEST in [chat_id, chat_username]:
+        post = await db.get_post_by_best_id(query.message.message_id)
+    elif CHAT_ID_POPULAR in [chat_id, chat_username]:
         post = await db.get_post_by_popular_id(query.message.message_id)
     else:
         post = await db.get_post(query.message.message_id)
@@ -100,7 +109,7 @@ async def vote_handler(update: Update, context: CallbackContext):
     keyboard = PostKeyboard(
         rating=rating[0] - rating[1],
         thread_id=post["comment_thread_id"],
-        comments=post["comments"]
+        comment_count=post["comment_count"],
     )
     await context.bot.edit_message_reply_markup(
         chat_id=CHAT_ID_NEW,
@@ -120,9 +129,17 @@ async def vote_handler(update: Update, context: CallbackContext):
         await db.add_to_popular(post["message_id"], msg.message_id)
         logger.info(f"Post {post['message_id']} became popular")
 
+    if post.get("best_id") is None and is_best(rating, post["comment_count"]):
+        msg = await query.message.copy(CHAT_ID_BEST, reply_to_message_id=BEST_CHANNEL_TOPIC_MESSAGE_ID)
+        await db.add_to_best(post["message_id"], msg.message_id)
+        logger.info(f"Post {post['message_id']} became best")
+
 
 def is_popular(rating: tuple[int, int]) -> bool:
-    """Checks if message is situatable for popular"""
+    """Checks if message is suitable for popular
+    
+    Takes into account number of positive votes and percentage of them.
+    """
 
     positive_votes, negative_votes = rating
     if positive_votes + negative_votes == 0:
@@ -134,6 +151,25 @@ def is_popular(rating: tuple[int, int]) -> bool:
     return (
         positive_votes_percentage > POPULAR_POSITIVE_VOTES_PERCENTAGE 
         and positive_votes >= POPULAR_POSITIVE_VOTES_MIN_COUNT
+    )
+
+def is_best(rating: tuple[int, int], comment_count: int) -> bool:
+    """Checks if message is suitable for best
+    
+    Takes into account number of positive votes, percentage of them
+    as well as number of comments.
+    """
+
+    positive_votes, negative_votes = rating
+    if positive_votes + negative_votes == 0:
+        return False
+    
+    positive_votes_percentage = positive_votes / (positive_votes + negative_votes) * 100
+
+    return (
+        positive_votes_percentage > BEST_POSITIVE_VOTES_PERCENTAGE
+        and positive_votes >= BEST_POSITIVE_VOTES_MIN_COUNT
+        and comment_count > BEST_COMMENT_MIN_COUNT
     )
 
 
@@ -259,7 +295,7 @@ async def comments_handler(update: Update, context: CallbackContext):
     keyboard = PostKeyboard(
         rating=rating[0] - rating[1],
         thread_id=post["comment_thread_id"],
-        comments=post["comments"]
+        comment_count=post["comment_count"],
     )
 
     await context.bot.edit_message_reply_markup(
