@@ -130,7 +130,11 @@ async def vote_handler(update: Update, context: CallbackContext):
         logger.info(f"Post {post['message_id']} became popular")
 
     if post.get("best_id") is None and is_best(rating, post["comment_count"]):
-        msg = await query.message.copy(CHAT_ID_BEST, reply_to_message_id=BEST_CHANNEL_TOPIC_MESSAGE_ID)
+        msg = await query.message.copy(
+            CHAT_ID_BEST,
+            reply_to_message_id=BEST_CHANNEL_TOPIC_MESSAGE_ID,
+            reply_markup=keyboard.to_reply_markup(),
+        )
         await db.add_to_best(post["message_id"], msg.message_id)
         logger.info(f"Post {post['message_id']} became best")
 
